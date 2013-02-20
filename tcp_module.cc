@@ -15,6 +15,7 @@
 
 #include "Minet.h"
 #include "tcpstate.h"
+#include "tcp.h"
 
 using std::cout;
 using std::endl;
@@ -87,6 +88,8 @@ int main(int argc, char *argv[])
 	checksumok = tcph.IsCorrectChecksum(p);
 
 	Connection c;
+
+	SockRequestResponse reply, request;
 	
 	//retrieve info from ip and tcp headers
 	iph.GetDestIP(c.src);
@@ -107,6 +110,17 @@ int main(int argc, char *argv[])
 	   Buffer &data=p.GetPayLoad().ExtractFront(len);
 	   
 	   unsigned int state = (*cs).state.GetState();
+	   //receiver window
+	   (*cs).state.rwnd = winsize;
+	   printf("Receiver window size: %d", winsize);
+	   //if receiver window size is smaller than sending window size
+	   if (winsize <= (*cs).state.GetN()) 
+	   {
+		//   winsize / (MSS*MSS)
+		// N is the window size for tcpstate
+		(*cs).state.N = winsize/TCP_MAXIMUM_SEGMENT_SIZE * TCP_MAXIMUM_SEGMENT_SIZE;
+		printf("New Sender window size: %d", (*cs).state.GetN());
+	   }
 
 	   switch (state) {
 	   case CLOSED:
@@ -117,6 +131,24 @@ int main(int argc, char *argv[])
 	     break;
 	   case SYN_RCVD:
 	     // handle state SYN_RCVD;
+	     printf("syn_rcvd\n");
+	     if (IS_ACK(flags)) {
+		//.GetLastSent() will get the last sent ack, but we want to increment by one to see if it matches with what we expect our ack to be due to sequential acknowledgement
+		if ((*cs).state.GetLastSent() + 1 == ack) {
+		    printf("Established\n");
+		    (*cs).state.SetState(ESTABLISHED);  //since we got here that means we are established!
+		    (*cs).state.SetSendRwnd(winsize);  //set the window size
+		    (*cs).state.SetLastAcked(ack);  //reset the last recieved ack
+		    (*cs).bTmrActive = false;  //we recieved the packet so turn off the timer!
+
+		    //Now we need to talk with the socket...
+		    reply.type = WRITE; //ssrtype = WRITE  
+		    reply.connection = c;  //give it the tcp connection
+		    reply.error = EOK;  //EOK = 0 means good
+		    reply.bytes = 0;   //initialize at 0
+		    MinetSend(sock, reply);  //send to sock layer
+		}
+	     }
 	     break;
 	   case SYN_SENT:
 	     //handle state SYN_SENT;
