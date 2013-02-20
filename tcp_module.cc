@@ -22,6 +22,9 @@ using std::endl;
 using std::cerr;
 using std::string;
 
+void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<TCPState> &clist);
+void sockHandler(const MinetHandl &mux, const MinetHandle &sock, ConnectionList<TCPState> &clist);
+
 int main(int argc, char *argv[])
 {
   MinetHandle mux, sock;
@@ -59,7 +62,36 @@ int main(int argc, char *argv[])
     } else {
       //  Data from the IP layer below  //
       if (event.handle==mux) {
+
+	muxHandler(mux, sock, clist);
+	
+      }
+      //  Data from the Sockets layer above  //
+      if (event.handle==sock) {
+
+	sockHandler(mux, sock, clist);
+<<<<<<< HEAD
+=======
+	//write interface to sock
+>>>>>>> 93db8eeeaa6bf5aa211711ed10394effc91e6d60
+	SockRequestResponse s;
+	MinetReceive(sock,s);
+	cerr << "Received Socket Request:" << s << endl;
+      }
+    }
+  }
+<<<<<<< HEAD
+=======
+
+  
+>>>>>>> 93db8eeeaa6bf5aa211711ed10394effc91e6d60
+  return 0;
+}
+
+void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<TCPState> &clist)
+{
 	Packet p;
+	Packet out_packet;  //syn/ack packet for listen
 <<<<<<< HEAD
 	MinetReceive(mux,p);
 	unsigned tcphlen=TCPHeader::EstimateTCPHeaderLength(p);
@@ -93,6 +125,7 @@ int main(int argc, char *argv[])
 	iph.GetDestIP(c.src);
 	iph.GetSourceIP(c.dest);
 	iph.GetProtocol(c.protocol);
+
 	tcph.GetDestPort(c.srcport);
 	tcph.GetSourcePort(c.destport);
 	tcph.GetSeqNum(seqnum);
@@ -126,6 +159,24 @@ int main(int argc, char *argv[])
 	     break;
 	   case LISTEN:
 	       //handle state LISTEN;
+		//want to check if we find an SYN because we are Listening...
+		//we may want to check for FIN is case there needs to be an RST in the connection (reset)
+		if (IS_SYN(flags)) {
+		    (*cs).state.SetState(SYN_RCVD);  //set the state to SYN_RCVD because we just received a SYN  (RFC)
+		    (*cs).bTmrActive = true;   //turn on the timer
+		    (*cs).connection = c;   //reset the connection
+		    //since we have the sequence number, we can set it as the last received (incremented by one)
+		    (*cs).state.SetLastRecvd(seq+1);
+		    (*cs).timeout = Time() + 10; //I dunno why 10 would be good or not...
+		    (*cs).state.last_acked = (*cs).state.last_sent - 1;
+		    
+		    //create the SYN/ACK packet   (RFC)  --> out_packet comes from this
+		    MinetSend(mux, out_packet);
+		}
+		else if (IS_FIN(flags)) {
+		    //create a RST packet   (RFC)  --> out_packet comes from this
+		    MinetSend(mux, out_packet);
+		}
 	     break;
 	   case SYN_RCVD:
 	     // handle state SYN_RCVD;
@@ -189,24 +240,6 @@ int main(int argc, char *argv[])
 >>>>>>> 93db8eeeaa6bf5aa211711ed10394effc91e6d60
 
 	cerr << "Checksum is " << (tcph.IsCorrectChecksum(p) ? "VALID" : "INVALID");
-	
-      }
-      //  Data from the Sockets layer above  //
-      if (event.handle==sock) {
-<<<<<<< HEAD
-=======
-	//write interface to sock
->>>>>>> 93db8eeeaa6bf5aa211711ed10394effc91e6d60
-	SockRequestResponse s;
-	MinetReceive(sock,s);
-	cerr << "Received Socket Request:" << s << endl;
-      }
-    }
-  }
-<<<<<<< HEAD
-=======
-
-  
->>>>>>> 93db8eeeaa6bf5aa211711ed10394effc91e6d60
-  return 0;
 }
+
+
