@@ -88,8 +88,6 @@ int main(int argc, char *argv[])
 	checksumok = tcph.IsCorrectChecksum(p);
 
 	Connection c;
-
-	SockRequestResponse reply, request;
 	
 	//retrieve info from ip and tcp headers
 	iph.GetDestIP(c.src);
@@ -142,11 +140,12 @@ int main(int argc, char *argv[])
 		    (*cs).bTmrActive = false;  //we recieved the packet so turn off the timer!
 
 		    //Now we need to talk with the socket...
-		    reply.type = WRITE; //ssrtype = WRITE  
-		    reply.connection = c;  //give it the tcp connection
-		    reply.error = EOK;  //EOK = 0 means good
-		    reply.bytes = 0;   //initialize at 0
-		    MinetSend(sock, reply);  //send to sock layer
+		    SockRequestResponse repl;
+		    repl.type = WRITE; //ssrtype = WRITE  
+		    repl.connection = c;  //give it the tcp connection
+		    repl.error = EOK;  //EOK = 0 means good
+		    repl.bytes = 0;   //initialize at 0
+		    MinetSend(sock, repl);  //send to sock layer
 		}
 	     }
 	     break;
