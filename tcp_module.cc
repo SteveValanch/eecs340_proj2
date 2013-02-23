@@ -75,12 +75,7 @@ int main(int argc, char *argv[])
       if (event.handle==sock) {
 
 	sockHandler(mux, sock, clist);
-<<<<<<< HEAD
-=======
-	//write interface to sock
->>>>>>> 93db8eeeaa6bf5aa211711ed10394effc91e6d60
-	SockRequestResponse s;
-	MinetReceive(sock,s);
+
 	cerr << "Received Socket Request:" << s << endl;
       }
     }
@@ -161,6 +156,7 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 	   switch (state) {
 		   case CLOSED:
 		       //handle state CLOSED;
+
 		     break;
 		   case LISTEN:
 		       //handle state LISTEN;
@@ -168,11 +164,11 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 			//we may want to check for FIN is case there needs to be an RST in the connection (reset)
 			if (IS_SYN(flags)) {
 			    (*cs).state.SetState(SYN_RCVD);  //set the state to SYN_RCVD because we just received a SYN  (RFC)
-			    (*cs).bTmrActive = true;   //turn on the timer
+			    //(*cs).bTmrActive = true;   //turn on the timer
 			    (*cs).connection = c;   //reset the connection
 			    //since we have the sequence number, we can set it as the last received
 			    (*cs).state.SetLastRecvd(seqnum);
-			    (*cs).timeout = Time() + 10; //I dunno why 10 would be good or not...
+			    //(*cs).timeout = Time() + 10; //I dunno why 10 would be good or not...
 			    
 			    //create the SYN/ACK packet   (RFC)  --> out_packet comes from this
 			    packetMaker(out_packet, *cs, 0, S_SYN_ACK);  //3 does SYN/ACK
@@ -205,20 +201,42 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 			    MinetSend(sock, repl);  //send to sock layer
 			}
 		     }
+		     else if (IS_RST(flags))
+		     {
+			(*cs).state.SetState(LISTEN);
+
+			SockRequestResponse repl;
+			repl.type = STATUS:
+			repl.connection = c;
+			repl.error = EOK;
+			repl.bytes = 0;
+			MinetSend(sock, repl);			
+		     }
 		     break;
 		   case SYN_SENT:
 		     //handle state SYN_SENT;
 		     	printf("syn_sent\n");
 		     	if (IS_SYN(flags) && IS_ACK(flags))
 		     	{
-			    (*cs).state.SetSendRwnd(winsize);  //set the send window 
 			    
+			    (*cs).state.SetState(ESTABLISHED);
+
+			    (*cs).state.SetSendRwnd(winsize);  //set the send window 
+			    (*cs).bTmrActive = false;
+
 			    /*****  WHY DOES THIS GO TO SEQNUM + 1 ??? *****/ 
 			    (*cs).state.SetLastRecvd(seqnum + 1);
 			    //send an ACK packet
 			    packetMaker(out_packet, *cs, 0, S_ACK);
 			    MinetSend(mux, out_packet);
-			    (*cs).state.SetState(ESTABLISHED);
+			    
+			}
+		 	else if (IS_SYN(flags))
+			{
+			    (*cs).state.SetState(SYN_RCVD);
+
+			    packetMaker(out_packet, *cs, 0, S_SYN_ACK);
+			    MinetSend(mux, out_packet);
 			}
 		     break;
 		   case ESTABLISHED:
@@ -254,6 +272,24 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 		     break;
 		   case FIN_WAIT1:
 		     //handle case FIN_WAIT1;
+			if (IS_FIN(flags) && IS_ACK(flags))
+			{
+			    (*cs).state.SetState(TIME_WAIT);
+
+			    packetMaker(out_packet, *cs, 0, S_ACK);
+			    MinetSend(mux, out_packet);
+			}
+			else if (IS_FIN(flags))
+			{
+			    (*cs).state.SetState(LAST_ACK);
+
+			    packetMaker(out_packet, *cs, 0, S_ACK);
+			    MinetSend(mux, out_packet);
+			}
+			else if (IS_ACK(flags))
+			{
+			    (*cs).state.SetState(FIN_WAIT2);
+			}
 		     break;
 		   case CLOSING:
 		     //handle case CLOSING;
@@ -271,6 +307,13 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 		     break;
 		   case FIN_WAIT2:
 		     //handle case FIN_WAIT2;
+			if (IS_FIN(flags))
+			{
+			    (*cs).state.SetState(TIME_WAIT);
+
+			    packetMaker(out_packet, *cs, 0, S_ACK);
+			    MinetSend(mux, out_packet);
+			}
 		     break;
 		   case TIME_WAIT:
 		     //handle case TIME_WAIT;
@@ -285,6 +328,122 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 >>>>>>> 93db8eeeaa6bf5aa211711ed10394effc91e6d60
 
 	cerr << "Checksum is " << (tcph.IsCorrectChecksum(p) ? "VALID" : "INVALID");
+}
+
+void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<TCPState> &clist)
+{
+    SockRequestResponse s;
+    MinetReceive(sock,s);
+
+    switch(s.type)
+    {
+	case CONNECT:
+	{
+	    Packet out_packet;
+
+	    unsigned int timerTries = 3;
+	    //TCPState(unsigned int initialSequenceNum, unsigned int state, unsigned int timertries);
+	    TCPState newTCPState = TCPState(rand(), SYN_SENT, timerTries);  //SYN_SENT because diagram for *active open ; also p15 Minet
+	     
+	    ConnectionToStateMapping<TCPState> constate;
+	    constate.connection = s.connection;
+            //constate.timeout = Time() + ACK_TIMEOUT;
+	    constate.state = newTCPState;
+
+	    //now need to creat a syn packet to send out, diagram for *active open to SYN_SENT
+	    packetMaker(out_packet, constate, 0, S_SYN);
+	    MinetSend(mux, out_packet);
+
+	    //make this connection to the front on the connection list
+	    clist.push_front(constate);
+
+	    //send out a STATUS sock reply
+	    SockRequestResponse repl;
+	    repl.type = STATUS;
+	    repl.connection = s.connection;
+	    repl.bytes = 0;
+	    repl.error = EOK;
+	    MinetSend(sock, repl);
+
+	}
+	break;
+        
+	case ACCEPT:
+	{
+	    unsigned int timerTries = 3;
+
+	    TCTCPState newTCPState = TCPState(rand(), LISTEN, timerTries); //LISTEN because of diagram for *passive open ; also p15 Minet
+	   
+	    ConnectionToStateMapping<TCPState> constate;
+	    constate.connection = s.connection;
+            //constate.timeout = Time() + ACK_TIMEOUT;
+	    constate.state = newTCPState;
+
+	    //Send Nothing as per diagram
+
+	    clist.push_front(constate);
+
+
+	    /*****      DO WE NEED THIS TOO ?   (p15 Minet) ****/
+	    //send out a STATUS sock reply
+	    SockRequestResponse repl;
+	    repl.type = STATUS;
+	    repl.error = EOK;
+	    MinetSend(sock, repl);
+
+	}
+	break;
+
+	case WRITE:
+	{
+	    Packet out_packet;
+
+	    unsigned int bytes = s.data.GetSize();  //the request's size
+
+	    ConnectionToStateMapping<TCPState> constate;
+	    constate.connection = s.connection;
+
+	    /****  WHERE DOES Buffer COME FROM?     p15 Minet ****/
+
+	    packetMaker(out_packet, constate, bytes, S_ACK);  //****WHAT DO WE NEED TO SEND??? AN ACK? ****/
+	    MinetSend(mux, out_packet); 
+
+	    //p15 Minet
+	    SockRequestResponse repl;
+	    repl.connection = s.connection;
+	    repl.type = STATUS;
+	    repl.bytes = bytes;
+	    repl.error = EOK;
+	    MinetSend(sock, repl);
+
+	}
+	break;
+
+	case FORWARD:
+	{
+	    SockRequestResponse repl;
+	    repl.type = STATUS;
+	    repl.error = EOK;
+	    MinetSend(sock, repl);
+	}
+	break;
+
+	case CLOSE:
+	{
+	     
+	}
+	break;
+
+	case STATUS:
+	{
+	    //nothing for here apparently
+	}
+	break;
+
+	case 
+
+    }
+
 }
 
 void packetMaker(Packet &packet, ConnectionToStateMapping<TCPState>& constate, int size_of_data, int whichFlag)
@@ -308,28 +467,17 @@ void packetMaker(Packet &packet, ConnectionToStateMapping<TCPState>& constate, i
 
   switch (whichFlag){
   case S_SYN_ACK:
-    SET_ACK(flags);
     SET_SYN(flags);
+    SET_ACK(flags);
     break;
   case S_RST:
     SET_RST(flags);
     break;
   case S_ACK:
-    SET_FIN(flags);
     SET_ACK(flags);
     break;
   case S_FIN:
     SET_FIN(flags);
-    break;
-  case 5:
-    SET_PSH(flags);
-    SET_ACK(flags);
-    break;
-  case 6:
-    SET_ACK(flags);
-    break;
-  case 7:
-    SET_SYN(flags);
     break;
   default:
     break;
