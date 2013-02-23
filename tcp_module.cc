@@ -193,7 +193,6 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 			    printf("Established\n");
 			    (*cs).state.SetState(ESTABLISHED);  //since we got here that means we are established!
 			    (*cs).state.SetSendRwnd(winsize);  //set the window size
-			    (*cs).state.SetLastAcked(acknum);  //reset the last recieved ack
 			    (*cs).bTmrActive = false;  //we recieved the packet so turn off the timer!
 
 				/****  IS THIS NEEDED   ????   *****/
