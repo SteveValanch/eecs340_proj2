@@ -267,30 +267,30 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 			    MinetSend(mux, out_packet);
 =======
 		     	if (IS_SYN(flags) && IS_ACK(flags)){
-                if ((*cs).state.GetLastSent() == acknum-1){
-			    (*cs).state.SetState(ESTABLISHED); //change state into established
-			    (*cs).state.SetSendRwnd(winsize);  //set the send window
-			    (*cs).state.SetLastRecvd(seqnum);  //set LastRecvd to be seq we just received
+                		if ((*cs).state.GetLastSent() == acknum-1){
+			    		(*cs).state.SetState(ESTABLISHED); //change state into established
+			    		(*cs).state.SetSendRwnd(winsize);  //set the send window
+			    		(*cs).state.SetLastRecvd(seqnum);  //set LastRecvd to be seq we just received
 
-			    //send an ACK packet
-			    packetMaker(out_packet, *cs, 0, S_ACK);
-			    MinetSend(mux, out_packet);
+					    //send an ACK packet
+					    packetMaker(out_packet, *cs, 0, S_ACK);
+					    MinetSend(mux, out_packet);
 
-			    //change sender side fields after sending packet
-			    (*cs).state.SetLastSent(acknum); //sent seq number equal to our received ack num
-			    (*cs).state.SetLastAcked(seqnum+1); //sent ack number equal to the next seq num we want to receive
+					    //change sender side fields after sending packet
+					    (*cs).state.SetLastSent(acknum); //sent seq number equal to our received ack num
+					    (*cs).state.SetLastAcked(seqnum+1); //sent ack number equal to the next seq num we want to receive
 
-			    //turn on timer
-			    (*cs).bTmrActive = true;
-			    (*cs).timeout = Time() + 50;
+					    //turn on timer
+					    (*cs).bTmrActive = true;
+					    (*cs).timeout = Time() + 50;
 
-			    //talk to the socket about ESTABLISH state
-			    repl.type = WRITE;
-			    repl.connection = c;
-			    repl.error=EOK;
-			    repl.bytes=0;
-			    MinetSend(sock,repl);
-			  }
+					    //talk to the socket about ESTABLISH state
+					    repl.type = WRITE;
+					    repl.connection = c;
+					    repl.error=EOK;
+					    repl.bytes=0;
+					    MinetSend(sock,repl);
+			  	}		
 			} else if (IS_SYN(flags)){
 			    (*cs).state.SetState(SET_RCVD);
 			    (*cs).staet.SetSendRwnd(winsize);
