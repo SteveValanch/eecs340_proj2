@@ -228,17 +228,6 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 		       repl.bytes = 0;
 		       MinetSend(sock,repl);
 		     }
-		     else if (IS_RST(flags))
-		     {
-			(*cs).state.SetState(LISTEN);
-
-			SockRequestResponse repl;
-			repl.type = STATUS:
-			repl.connection = c;
-			repl.error = EOK;
-			repl.bytes = 0;
-			MinetSend(sock, repl);			
-		     }
 		     break;
 		   case SYN_SENT:
 		     //handle state SYN_SENT;
@@ -266,54 +255,56 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 			    packetMaker(out_packet, *cs, 0, S_SYN_ACK);
 			    MinetSend(mux, out_packet);
 =======
-		     	if (IS_SYN(flags) && IS_ACK(flags)){
-                		if ((*cs).state.GetLastSent() == acknum-1){
-			    		(*cs).state.SetState(ESTABLISHED); //change state into established
-			    		(*cs).state.SetSendRwnd(winsize);  //set the send window
-			    		(*cs).state.SetLastRecvd(seqnum);  //set LastRecvd to be seq we just received
+		     	    if (IS_SYN(flags) && IS_ACK(flags))
+			    {
+                		if ((*cs).state.GetLastSent() == acknum-1)
+                                {
+			    	    (*cs).state.SetState(ESTABLISHED); //change state into established
+			    	    (*cs).state.SetSendRwnd(winsize);  //set the send window
+			    	    (*cs).state.SetLastRecvd(seqnum);  //set LastRecvd to be seq we just received
 
-					    //send an ACK packet
-					    packetMaker(out_packet, *cs, 0, S_ACK);
-					    MinetSend(mux, out_packet);
+					//send an ACK packet
+			            packetMaker(out_packet, *cs, 0, S_ACK);
+				    MinetSend(mux, out_packet);
 
-					    //change sender side fields after sending packet
-					    (*cs).state.SetLastSent(acknum); //sent seq number equal to our received ack num
-					    (*cs).state.SetLastAcked(seqnum+1); //sent ack number equal to the next seq num we want to receive
+					//change sender side fields after sending packet
+				    (*cs).state.SetLastSent(acknum); //sent seq number equal to our received ack num
+				    (*cs).state.SetLastAcked(seqnum+1); //sent ack number equal to the next seq num we want to receive
 
-					    //turn on timer
-					    (*cs).bTmrActive = true;
-					    (*cs).timeout = Time() + 50;
+    				        //turn on timer
+				    (*cs).bTmrActive = true;
+				    (*cs).timeout = Time() + 50;
 
-					    //talk to the socket about ESTABLISH state
-					    repl.type = WRITE;
-					    repl.connection = c;
-					    repl.error=EOK;
-					    repl.bytes=0;
-					    MinetSend(sock,repl);
+					//talk to the socket about ESTABLISH state
+				    repl.type = WRITE;
+				    repl.connection = c;
+				    repl.error=EOK;
+				    repl.bytes=0;
+				    MinetSend(sock,repl);
 			  	}		
-			} else if (IS_SYN(flags)){
-			    (*cs).state.SetState(SET_RCVD);
-			    (*cs).staet.SetSendRwnd(winsize);
-			    (*cs).state.SetLastRecvd(seqnum);
+			    } else if (IS_SYN(flags)){
+			        (*cs).state.SetState(SET_RCVD);
+			        (*cs).staet.SetSendRwnd(winsize);
+			        (*cs).state.SetLastRecvd(seqnum);
 
-			    //send an SYN/ACK packet
-			    packetMaker(out_packet, *cs, 0, S_SYN_ACK);
-			    MinetSend(mux, out_packet);
+			        //send an SYN/ACK packet
+			        packetMaker(out_packet, *cs, 0, S_SYN_ACK);
+			        MinetSend(mux, out_packet);
 
-			    //change sender side fields after sending packet
-			    /* (*cs).state.SetLastSent(acknum); LastSent shouldn't be changed in this case if you read RFC 793 simultaneous open */
-			    (*cs).state.SetLastAcked(seqnum+1);
+			        //change sender side fields after sending packet
+			        /* (*cs).state.SetLastSent(acknum); LastSent shouldn't be changed in this case if you read RFC 793 simultaneous open */
+			        (*cs).state.SetLastAcked(seqnum+1);
 
-			    //turn on timer
-			    (*cs).bTmrActive = true;
-			    (*cs).timeout = Time() + 50;
+			        //turn on timer
+			        (*cs).bTmrActive = true;
+			        (*cs).timeout = Time() + 50;
 
-			    //talk to the socket about SYN_RCVD state
-			    repl.type = STATUS;
-			    repl.connection = c;
-			    repl.error = EOK;
-			    repl.bytes = 0;
-			    MinetSend(sock,repl);
+			        //talk to the socket about SYN_RCVD state
+			        repl.type = STATUS;
+			        repl.connection = c;
+			        repl.error = EOK;
+			        repl.bytes = 0;
+			        MinetSend(sock,repl);
 >>>>>>> 48fbe6dfeb326611295ae59dc7d7679f8fffff78
 			}
 		     break;
@@ -328,13 +319,9 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 
 
 			}
-			else if (IS_PSH(flags))  //p247
+			else //receive application data?  //p31 RFC  receiving data
 			{
-
-			}
-			else if (IS_ACK(flags))  //p31 RFC
-			{
-
+			    
 			}
 		     //handle state ESTABLISHED;
 		     break;
@@ -359,7 +346,7 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 			}
 			else if (IS_FIN(flags))
 			{
-			    (*cs).state.SetState(LAST_ACK);
+			    (*cs).state.SetState(CLOSING);
 
 			    packetMaker(out_packet, *cs, 0, S_ACK);
 			    MinetSend(mux, out_packet);
@@ -371,6 +358,10 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 		     break;
 		   case CLOSING:
 		     //handle case CLOSING;
+			if (IS_ACK(flags))
+			{
+			    (*cs).state.SetState(TIME_WAIT);
+			}
 		     break;
 		   case LAST_ACK:
 
@@ -411,6 +402,9 @@ void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList
 {
     SockRequestResponse s;
     MinetReceive(sock,s);
+
+    ConnectionList<TCPState>::iterator cs = clist.FindMatching(c);
+
 
     switch(s.type)
     {
@@ -507,7 +501,47 @@ void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList
 
 	case CLOSE:
 	{
-	     
+	     unsigned int state = (*cs).state.GetState();
+
+	     switch (state)
+		{
+		    case SYN_SENT:
+		    {
+			Packet out_packet;
+			createIPPacket(out_packet, *cs, 0, S_FIN);//create fin packet
+        		MinetSend(mux, out);
+        		connls->state.SetLastSent(connls->state.GetLastSent() + 1);
+        		connls->state.SetState(CLOSED);
+		    }
+		    break;
+		
+		    case SYN_RCVD:
+		    {
+			Packet out_packet;
+			createIPPacket(out_packet, *cs, 0, S_FIN);//create fin packet
+        		MinetSend(mux, out_packet);
+        		(*cs).state.SetState(FIN_WAIT1);
+		    }
+		    break;
+
+		    case ESTABLISHED:
+		    {
+			Packet out_packet;
+			createIPPacket(out_packet, *cs, 0, S_FIN);//create fin packet
+        		MinetSend(mux, out);
+        		(*cs).state.SetState(FIN_WAIT1);
+		    }
+		    break;
+
+		    case CLOSE_WAIT:
+		    {
+			Packet out_packet;
+			createIPPacket(out_packet, *cs, 0, S_FIN);//create fin packet
+        		MinetSend(mux, out);
+        		connls->state.SetState(LAST_ACK);
+		    }
+		    break;
+		}
 	}
 	break;
 
@@ -516,6 +550,14 @@ void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList
 	    //nothing for here apparently
 	}
 	break;
+
+	default:
+	{
+		SockRequestResponse repl;
+		repl.type=STATUS;
+		repl.error=EWHAT;
+		MinetSend(sock,repl);
+	}
 
 	case 
 
