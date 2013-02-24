@@ -28,7 +28,8 @@ using std::cerr;
 using std::string;
 
 void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<TCPState> &clist);
-void sockHandler(const MinetHandl &mux, const MinetHandle &sock, ConnectionList<TCPState> &clist);
+void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<TCPState> &clist);
+void timeoutHandler(MinetEvent event, ConnectionList<TCPState>::iterator cs);
 
 int main(int argc, char *argv[])
 {
@@ -55,29 +56,36 @@ int main(int argc, char *argv[])
   MinetEvent event;
 
   while (MinetGetNextEvent(event)==0) {
-    // if we received an unexpected type of event, print error
-    if (event.eventtype!=MinetEvent::Dataflow
-	|| event.direction!=MinetEvent::IN) {
-      MinetSendToMonitor(MinetMonitoringEvent("Unknown event ignored."));
-    // if we received a valid event from Minet, do processing
-    } else {
-      //  Data from the IP layer below  //
-      if (event.handle==mux) {
-	muxHandler(mux, sock, clist);
-      }
-      //  Data from the Sockets layer above  //
-      if (event.handle==sock)
-	sockHandler(mux, sock, clist);
-<<<<<<< HEAD
+      // if we received an unexpected type of event, print error
+      if (event.eventtype!=MinetEvent::Dataflow || event.direction!=MinetEvent::IN) {
+      	    MinetSendToMonitor(MinetMonitoringEvent("Unknown event ignored."));
+    	    // if we received a valid event from Minet, do processing
+	  if (event.eventtype==MinetEvent::Timeout)  
+	  {
+	      // timeout ! probably need to resend some packets
+	      ConnectionList<TCPState>::iterator cs = clist.FindEarliest();
+	      // Remember clist is a list which keeps the information of connections.
+	      if( cs != clist.end() )
+	      {
+	    	  if (Time().operator > ((*cs).timeout))
+		  	timeoutHandler(event,cs);
+	      }
+	  }
 
-=======
-	//write interface to sock
-	SockRequestResponse s;
-	MinetReceive(sock,s);
->>>>>>> 48fbe6dfeb326611295ae59dc7d7679f8fffff78
-	cerr << "Received Socket Request:" << s << endl;
+      } 
+      else 
+      {
+          //  Data from the IP layer below  //
+          if (event.handle==mux) {
+	      muxHandler(mux, sock, clist);
+          }
+          //  Data from the Sockets layer above  //
+          if (event.handle==sock)
+	  {
+	      sockHandler(mux, sock, clist);
+	      cerr << "Received Socket Request:" << s << endl;
+          }
       }
-    }
   }
 
   return 0;
@@ -159,14 +167,13 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 			//we may want to check for FIN is case there needs to be an RST in the connection (reset)
 			if (IS_SYN(flags)) {
 			    (*cs).state.SetState(SYN_RCVD);  //set the state to SYN_RCVD because we just received a SYN  (RFC)
-<<<<<<< HEAD
+
 			    //(*cs).bTmrActive = true;   //turn on the timer
 			    (*cs).connection = c;   //reset the connection
 			    //since we have the sequence number, we can set it as the last received
 			    (*cs).state.SetLastRecvd(seqnum);
 			    //(*cs).timeout = Time() + 10; //I dunno why 10 would be good or not...
-			    
-=======
+			   
 			    (*cs).connection = c;   //reset the connection NECESSARY?
 
 			    (*cs).state.SetLastRecvd(seqnum); //receiver side - set LastRecvd to the seqnum we just received
@@ -175,7 +182,6 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 			    (*cs).bTmrActive = true;
 			    (*cs).timeout = Time() + 50; //I dunno why 50 would be good or not...
 
->>>>>>> 48fbe6dfeb326611295ae59dc7d7679f8fffff78
 			    //create the SYN/ACK packet   (RFC)  --> out_packet comes from this
 			    packetMaker(out_packet, *cs, 0, S_SYN_ACK);
 			    MinetSend(mux, out_packet);
@@ -640,6 +646,62 @@ void packetMaker(Packet &packet, ConnectionToStateMapping<TCPState>& constate, i
   tcp.RecomputeChecksum(packet);
   packet.PushBackHeader(tcp);
 
+}
+
+void timeoutHandler(MinetEvent event, ConnectionList<TCPState>::iterator cs)
+{
+    if ( (*cs).state.ExpireTimerTries() || 
+	 (*cs).state.GetState()==SYN_SENT ||
+	 (*cs).state.GetState()==TIME_WAIT )   //from diagram
+    {
+        cout << "Now closing the connection, timeout!!" << endl;
+	clist.erase(cs);  //erase the connection
+    }
+    else if ((*cs).state.GetState()==ESTABLISHED)  //if we've been sending out data! resend!
+    {
+	(*cs).timeout = Time() + 40;
+	ConnectionToStateMapping<TCPState>& constate = (*cs);
+
+	int bufferLen = m.state.SendBuffer.GetSize();
+	const int Size = TCP_MAXIMUM_SEGMENT_SIZE;
+	
+	char buffer[Size];
+	int whereAt = 0;
+
+	//This should be the GoBackN stuff
+
+	while( bufferLen > 0 )  //keep going until we've sent all of the stuff in the buffer
+ 	{
+	    //Redo the whole process as in sending a packet...for each packet in the window that got skipped
+
+	    //Resend the data, get the payload
+	    int data = constate.state.SendBuffer.GetData(buffer, Size, whereAt); 
+	    Packet out_packet = new Packet(buffer, data);
+	
+	    // IP header stuff
+	    IPHeader ih;
+	    ih.SetProtocol(IP_PROTO_TCP);
+	    ih.SetSourceIP(constate.connection.src);
+	    ih.SetDestIP(constate.connection.dest);
+	    ih.SetTotalLength(TCP_HEADER_BASE_LENGTH + IP_HEADER_BASE_LENGTH + 20); // push it onto the packet
+	    out_packet.PushFrontHeader(ih);
+	
+	    // TCP header stuff
+	    TCPHeader tcpsah;
+	    tcpsah.SetDestPort(constate.connection.destport, out_packet);
+	    tcpsah.SetSourcePort(constate.connection.srcport, out_packet);
+	    tcpsah.SetSeqNum(constate.state.GetLastSent() + whereAt + data, out_packet);
+	    tcpsah.RecomputeChecksum(out_packet);
+	    out_packet.PushBackHeader(tcpsah);
+	
+	    //Send the TCP segment out to mux
+	    MinetSend(mux, out_packet);
+
+	    bufferLen -= Size;  //shorted the buffer now that we sent out one of the packets
+	    whereAt += Size;    //move over where to get data from the buffer
+
+	}
+    }
 }
 
 
