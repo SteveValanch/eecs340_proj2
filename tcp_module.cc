@@ -413,13 +413,14 @@ void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList
 	    Packet out_packet;
 
 	    unsigned int timerTries = 3;
-	    //TCPState(unsigned int initialSequenceNum, unsigned int state, unsigned int timertries);
+	    
 	    TCPState newTCPState = TCPState(rand(), SYN_SENT, timerTries);  //SYN_SENT because diagram for *active open ; also p15 Minet
 	     
 	    ConnectionToStateMapping<TCPState> constate;
 	    constate.connection = s.connection;
             //constate.timeout = Time() + ACK_TIMEOUT;
 	    constate.state = newTCPState;
+	    constate.state.SetLastSent(constate.state.GetLastSent()+1);
 
 	    //now need to creat a syn packet to send out, diagram for *active open to SYN_SENT
 	    packetMaker(out_packet, constate, 0, S_SYN);
@@ -441,52 +442,64 @@ void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList
         
 	case ACCEPT:
 	{
-	    unsigned int timerTries = 3;
+	    unsigned int state = (*cs).state.GetState();
 
-	    TCTCPState newTCPState = TCPState(rand(), LISTEN, timerTries); //LISTEN because of diagram for *passive open ; also p15 Minet
-	   
-	    ConnectionToStateMapping<TCPState> constate;
-	    constate.connection = s.connection;
-            //constate.timeout = Time() + ACK_TIMEOUT;
-	    constate.state = newTCPState;
+	    if (state != FIN_WAIT1)
+	    {
+	    
+		unsigned int timerTries = 3;
 
-	    //Send Nothing as per diagram
+		//LISTEN because of diagram for *passive open ; also p15 Minet
+	        TCTCPState newTCPState = TCPState(rand(), LISTEN, timerTries); 
+		   
+		ConnectionToStateMapping<TCPState> constate;
+		constate.connection = s.connection;
+		//constate.timeout = Time() + ACK_TIMEOUT;
+		constate.state = newTCPState;
+		
+                //Send Nothing as per diagram ; no setting last sent
 
-	    clist.push_front(constate);
+		clist.push_front(constate);
 
 
-	    /*****      DO WE NEED THIS TOO ?   (p15 Minet) ****/
-	    //send out a STATUS sock reply
-	    SockRequestResponse repl;
-	    repl.type = STATUS;
-	    repl.error = EOK;
-	    MinetSend(sock, repl);
-
+		//(p15 Minet)
+		//send out a STATUS sock reply
+		SockRequestResponse repl;
+		repl.type = STATUS;
+		repl.error = EOK;
+		MinetSend(sock, repl);
+	    }
+	
 	}
 	break;
 
 	case WRITE:
 	{
-	    Packet out_packet;
+	    unsigned int state = (*cs).state.GetState();
 
-	    unsigned int bytes = s.data.GetSize();  //the request's size
+	    if (state == ESTABLISHED)
+	    {
 
-	    ConnectionToStateMapping<TCPState> constate;
-	    constate.connection = s.connection;
+		Packet out_packet;
+		Buffer buff = s.data;
 
-	    /****  WHERE DOES Buffer COME FROM?     p15 Minet ****/
+		unsigned int bytes = s.data.GetSize();  //the request's size
+		
+	        Packet dataSend = Packet(s.data.ExtractFront(bytes));
 
-	    packetMaker(out_packet, constate, bytes, S_ACK);  //****WHAT DO WE NEED TO SEND??? AN ACK? ****/
-	    MinetSend(mux, out_packet); 
+		(*cs).state.SetLastSent((*cs).state.GetLastSent() + bytes));
 
-	    //p15 Minet
-	    SockRequestResponse repl;
-	    repl.connection = s.connection;
-	    repl.type = STATUS;
-	    repl.bytes = bytes;
-	    repl.error = EOK;
-	    MinetSend(sock, repl);
+		packetMaker(dataSend, *cs, bytes, S_ACK);  //****WHAT DO WE NEED TO SEND??? AN ACK? ****/
+		MinetSend(mux, dataSend); 
 
+		    //p15 Minet
+		SockRequestResponse repl;
+		repl.connection = s.connection;
+		repl.type = STATUS;
+		repl.bytes = bytes;
+		repl.error = EOK;
+		MinetSend(sock, repl);
+	    }
 	}
 	break;
 
@@ -507,11 +520,8 @@ void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList
 		{
 		    case SYN_SENT:
 		    {
-			Packet out_packet;
-			createIPPacket(out_packet, *cs, 0, S_FIN);//create fin packet
-        		MinetSend(mux, out);
-        		connls->state.SetLastSent(connls->state.GetLastSent() + 1);
-        		connls->state.SetState(CLOSED);
+			//start everything over
+			clist.erase(cs);
 		    }
 		    break;
 		
@@ -520,6 +530,7 @@ void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList
 			Packet out_packet;
 			createIPPacket(out_packet, *cs, 0, S_FIN);//create fin packet
         		MinetSend(mux, out_packet);
+			(*cs).state.SetLastSent((*cs).state.GetLastSent() + 1);
         		(*cs).state.SetState(FIN_WAIT1);
 		    }
 		    break;
@@ -528,7 +539,8 @@ void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList
 		    {
 			Packet out_packet;
 			createIPPacket(out_packet, *cs, 0, S_FIN);//create fin packet
-        		MinetSend(mux, out);
+        		MinetSend(mux, out_packet);
+			(*cs).state.SetLastSent((*cs).state.GetLastSent() + 1);
         		(*cs).state.SetState(FIN_WAIT1);
 		    }
 		    break;
@@ -537,8 +549,26 @@ void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList
 		    {
 			Packet out_packet;
 			createIPPacket(out_packet, *cs, 0, S_FIN);//create fin packet
-        		MinetSend(mux, out);
-        		connls->state.SetState(LAST_ACK);
+        		MinetSend(mux, out_packet);
+			(*cs).state.SetLastSent((*cs).state.GetLastSent()+1);
+        		(*cs).state.SetState(LAST_ACK);
+		    }
+		    break;
+
+		    case CLOSING:
+		    {
+			clist.erase(cs);
+			TCPState newTCPState = TCPState(rand(), LISTEN, 3);
+			ConnectionToStateMapping<TCPState> constate;
+			constate.state = s.connection;
+			constate.bTmrActive = false;
+			clist.push_front(newTCPState);
+		
+			reply.type = STATUS;
+			reply.connection = s.connection;
+			reply.bytes = 0;
+			reply.error = EOK;
+			MinetSend(sock, reply);
 		    }
 		    break;
 		}
