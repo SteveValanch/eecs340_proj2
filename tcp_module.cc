@@ -200,11 +200,7 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 			    (*cs).state.SetState(ESTABLISHED);  //since we got here that means we are established!
 			    (*cs).state.SetLastRecvd(seqnum);
 			    (*cs).state.SetSendRwnd(winsize);  //set the window size
-<<<<<<< Updated upstream
 			    (*cs).bTmrActive = false;  //we recieved the packet so turn off the timer!
-=======
-			    (*cs).bTmrActive = false //turn off the timer?
->>>>>>> Stashed changes
 
 				/****  IS THIS NEEDED   ????   *****/
 			    //Now we need to talk with the socket...
@@ -215,7 +211,6 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 			    MinetSend(sock, repl);  //send to sock layer
 			}
 		     } else if (IS_RST(flags)){
-		       printf("Reset SYN_RCVD to LISTEN\n");
 		       (*cs).state.SetState(LISTEN);
 		       (*cs).state.SetLastRecvd(seqnum);
 		       (*cs).state.SetSendRwnd(winsize);
@@ -479,7 +474,6 @@ void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList
 
 	    if (state == ESTABLISHED)
 	    {
-
 		Packet out_packet;
 		Buffer buff = s.data;
 
@@ -628,6 +622,7 @@ void packetMaker(Packet &packet, ConnectionToStateMapping<TCPState>& constate, i
   case S_FIN:
     SET_FIN(flags);
     break;
+  
   default:
     break;
   }
