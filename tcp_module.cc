@@ -107,7 +107,7 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 	bool checksumok;
 	unsigned int acknum, seqnum;
 	unsigned char flags;
-	unsigned short len, winsize;
+	unsigned short total_len, seg_len, data_len, winsize;
 
 	MinetReceive(mux,p);
 	unsigned tcphlen=TCPHeader::EstimateTCPHeaderLength(p);
@@ -138,23 +138,16 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 	 ConnectionList<TCPState>::iterator cs = clist.FindMatching(c);
 
 	 if (cs!=clist.end()) {
-	   iph.GetTotalLength(len);
-	   len = len - tcphlen - iphlen;
-	   Buffer &data=p.GetPayLoad().ExtractFront(len);
+	   iph.GetTotalLength(total_len); //total length including ip header
+	   seg_len = total_len - iphlen; //segment length including tcp header
+	   data_len = seg_len - tcphlen; //actual data length
+	   Buffer &data=p.GetPayLoad().ExtractFront(data_len);
 
 	   unsigned int state = (*cs).state.GetState();
 
 	   //receiver window
 	   (*cs).state.rwnd = winsize;
 	   printf("Receiver window size: %d", winsize);
-	   //if receiver window size is smaller than sending window size
-	   if (winsize <= (*cs).state.GetN())
-	   {
-		//   winsize / (MSS*MSS)
-		// N is the window size for tcpstate
-	        (*cs).state.N = winsize/(TCP_MAXIMUM_SEGMENT_SIZE * TCP_MAXIMUM_SEGMENT_SIZE);
-		printf("New Sender window size: %d", (*cs).state.GetN());
-	   }
 
 	   switch (state) {
 		   case CLOSED:
@@ -165,137 +158,97 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 		       //handle state LISTEN;
 			//want to check if we find an SYN because we are Listening...
 			//we may want to check for FIN is case there needs to be an RST in the connection (reset)
-			if (IS_SYN(flags)) {
-			    (*cs).state.SetState(SYN_RCVD);  //set the state to SYN_RCVD because we just received a SYN  (RFC)
-
-			    //(*cs).bTmrActive = true;   //turn on the timer
+		     
+		     //initialize sender and receiver window pointers
+		     (*cs).state.SetLastSent(0); 
+		     (*cs).state.SetLastRecvd(0);
+		     (*cs).state.SetLastAcked(0);
+		     
+		     if (IS_SYN(flags)) {
+			    (*cs).state.SetState(SYN_RCVD);  
 			    (*cs).connection = c;   //reset the connection
-			    //since we have the sequence number, we can set it as the last received
-			    (*cs).state.SetLastRecvd(seqnum);
-			    //(*cs).timeout = Time() + 10; //I dunno why 10 would be good or not...
-			   
-			    (*cs).connection = c;   //reset the connection NECESSARY?
-
-			    (*cs).state.SetLastRecvd(seqnum); //receiver side - set LastRecvd to the seqnum we just received
-
+			    
 			    //turn on the timer
 			    (*cs).bTmrActive = true;
-			    (*cs).timeout = Time() + 50; //I dunno why 50 would be good or not...
+			    (*cs).timeout = Time() + 50; 
 
-			    //create the SYN/ACK packet   (RFC)  --> out_packet comes from this
+			    (*cs).state.SetLastRecvd(seqnum); 
+			    (*cs).state.SetSendRwnd(winsize);
+
 			    packetMaker(out_packet, *cs, 0, S_SYN_ACK);
 			    MinetSend(mux, out_packet);
 
-			    //update LastAcked and LastSent
-			    (*cs).state.SetLastSent(300); //arbitrarily set our ISN to be 300
-			    (*cs).state.SetLastAcked(seq+1);
-			}
-			else if (IS_FIN(flags)) {
-			    //create a RST packet   (RFC)  --> out_packet comes from this
-			    packetMaker(out_packet, *cs, 0, S_RST);
-			    MinetSend(mux, out_packet);
-			}
+			    (*cs).state.SetLastSent((*cs).state.GetLastSent()+1)); //shifted last_sent one byte to the right    		       
+	           	}
 		     break;
 		   case SYN_RCVD:
 		     // handle state SYN_RCVD;
 		     printf("syn_rcvd\n");
-		     if (IS_ACK(flags)) {
-			//make sure the last ack is the sequence number we just received
-			if ((*cs).state.GetLastAcked() == seqnum) {  //p266 (3rd arrow)
-			    printf("Established\n");
-			    (*cs).state.SetState(ESTABLISHED);  //since we got here that means we are established!
-			    (*cs).state.SetLastRecvd(seqnum);
-			    (*cs).state.SetSendRwnd(winsize);  //set the window size
-			    (*cs).bTmrActive = false;  //we recieved the packet so turn off the timer!
+		     if ((*cs).state.GetLastRecvd() == seqnum) {  //p266 (3rd arrow)
+		     	if (IS_ACK(flags)) {
+			    	printf("Established\n");
+			    	(*cs).state.SetState(ESTABLISHED);  //since we got here that means we are established!
+			    	(*cs).state.SetSendRwnd(winsize);  //set the window size
+			    	(*cs).state.SetLastAcked((*cs).state.GetLastAcked()+1); //we received ack, so move last_acked pointer to right
+			    	(*cs).bTmrActive = false;  //last_acked = last_sent, turn off timer
 
-				/****  IS THIS NEEDED   ????   *****/
-			    //Now we need to talk with the socket...
-			    repl.type = WRITE; //ssrtype = WRITE
-			    repl.connection = c;  //give it the tcp connection
-			    repl.error = EOK;  //EOK = 0 means good
-			    repl.bytes = 0;   //initialize at 0
-			    MinetSend(sock, repl);  //send to sock layer
-			}
-		     } else if (IS_RST(flags)){
-		       (*cs).state.SetState(LISTEN);
-		       (*cs).state.SetLastRecvd(seqnum);
-		       (*cs).state.SetSendRwnd(winsize);
-		       (*cs).bTmrActive = false;
+			    	//Now we need to talk with the socket...
+			    	repl.type = WRITE; //ssrtype = WRITE
+			    	repl.connection = c;  //give it the tcp connection
+			    	repl.error = EOK;  //EOK = 0 means good
+			    	repl.bytes = 0;   //initialize at 0
+			    	MinetSend(sock, repl);  //send to socket
+		     	} else if (IS_RST(flags)) { //reset if RST flag is set
+		       		printf("Reset SYN_RCVD to LISTEN\n");
+		       		(*cs).state.SetState(LISTEN);
+		      		(*cs).bTmrActive = false;
 
-		       //not sure if it is needed to talk to socket about the status change
-		       repl.type = STATUS;
-		       repl.connection = c;
-		       repl.error = EOK;
-		       repl.bytes = 0;
-		       MinetSend(sock,repl);
+		       		//not sure if it is needed to talk to socket about the status change
+		       		repl.type = STATUS;
+		       		repl.connection = c;
+		       		repl.error = EOK;
+		       		repl.bytes = 0;
+		       		MinetSend(sock,repl);
+		      	}
 		     }
 		     break;
 		   case SYN_SENT:
 		     //handle state SYN_SENT;
 		     	printf("syn_sent\n");
-<<<<<<< HEAD
-		     	if (IS_SYN(flags) && IS_ACK(flags))
-		     	{
-			    
-			    (*cs).state.SetState(ESTABLISHED);
+		     	    if (IS_SYN(flags) && IS_ACK(flags)) {
+			      if ((*cs).state.GetLastSent() == acknum) {
+			  	(*cs).state.SetState(ESTABLISHED); //change state into established
+			  	(*cs).state.SetSendRwnd(winsize);  //set the send window
+				(*cs).state.SetLastAcked(acknum); //received ack, move last_acked to right			   	
+				(*cs).state.SetLastRecvd(seqnum);   		    
 
-			    (*cs).state.SetSendRwnd(winsize);  //set the send window 
-			    (*cs).bTmrActive = false;
-
-			    /*****  WHY DOES THIS GO TO SEQNUM + 1 ??? *****/ 
-			    (*cs).state.SetLastRecvd(seqnum + 1);
-			    //send an ACK packet
-			    packetMaker(out_packet, *cs, 0, S_ACK);
-			    MinetSend(mux, out_packet);
-			    
-			}
-		 	else if (IS_SYN(flags))
-			{
-			    (*cs).state.SetState(SYN_RCVD);
-
-			    packetMaker(out_packet, *cs, 0, S_SYN_ACK);
-			    MinetSend(mux, out_packet);
-=======
-		     	    if (IS_SYN(flags) && IS_ACK(flags))
-			    {
-                		if ((*cs).state.GetLastSent() == acknum-1)
-                                {
-			    	    (*cs).state.SetState(ESTABLISHED); //change state into established
-			    	    (*cs).state.SetSendRwnd(winsize);  //set the send window
-			    	    (*cs).state.SetLastRecvd(seqnum);  //set LastRecvd to be seq we just received
-
-					//send an ACK packet
-			            packetMaker(out_packet, *cs, 0, S_ACK);
-				    MinetSend(mux, out_packet);
-
-					//change sender side fields after sending packet
-				    (*cs).state.SetLastSent(acknum); //sent seq number equal to our received ack num
-				    (*cs).state.SetLastAcked(seqnum+1); //sent ack number equal to the next seq num we want to receive
-
-    				        //turn on timer
-				    (*cs).bTmrActive = true;
-				    (*cs).timeout = Time() + 50;
-
-					//talk to the socket about ESTABLISH state
-				    repl.type = WRITE;
-				    repl.connection = c;
-				    repl.error=EOK;
-				    repl.bytes=0;
-				    MinetSend(sock,repl);
-			  	}		
-			    } else if (IS_SYN(flags)){
+    				//turn on timer
+				(*cs).bTmrActive = true;
+				(*cs).timeout = Time() + 50;
+				    
+				//send ack packet
+				packetMaker(out_packet, *cs, 0, S_ACK);
+				MinetSend(mux, out_packet);
+				
+				//talk to the socket about ESTABLISH state
+				repl.type = WRITE;
+				repl.connection = c;
+				repl.error=EOK;
+				repl.bytes=0;
+				MinetSend(sock,repl);
+			      } else {
+			       	packetMaker(out_packet, *cs, 0, S_RST);
+				MinetSend(mux, out_packet);
+			      }
+			    } else if (IS_SYN(flags)) { //simultaneous connection 
 			        (*cs).state.SetState(SET_RCVD);
-			        (*cs).staet.SetSendRwnd(winsize);
+			        (*cs).state.SetSendRwnd(winsize);
 			        (*cs).state.SetLastRecvd(seqnum);
-
-			        //send an SYN/ACK packet
-			        packetMaker(out_packet, *cs, 0, S_SYN_ACK);
-			        MinetSend(mux, out_packet);
-
-			        //change sender side fields after sending packet
-			        /* (*cs).state.SetLastSent(acknum); LastSent shouldn't be changed in this case if you read RFC 793 simultaneous open */
-			        (*cs).state.SetLastAcked(seqnum+1);
-
+			
+				//send an SYN/ACK packet
+				packetMaker(out_packet, *cs, 0, S_SYN_ACK);
+				MinetSend(mux, out_packet);
+				
 			        //turn on timer
 			        (*cs).bTmrActive = true;
 			        (*cs).timeout = Time() + 50;
@@ -306,55 +259,61 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 			        repl.error = EOK;
 			        repl.bytes = 0;
 			        MinetSend(sock,repl);
->>>>>>> 48fbe6dfeb326611295ae59dc7d7679f8fffff78
-			}
+			   } 
 		     break;
 		   case ESTABLISHED:
-			if (IS_FIN(flags))  //p267
-			{
-			    //set to close wait state
-			    (*cs).state.SetState(CLOSE_WAIT);   //DIAGRAM boulder.ibm
-
-			    packetMaker(out_packet, *cs, 0, S_ACK);   //create ack packet
-          		    MinetSend(mux, out_packet);
-
-
+		     //handle state ESTABLISHED
+		     bool data_ok = (*cs).state.SetLastRecvd(seqnum,data_len); //check and set last_received
+		     if (checksumok && data_ok){  //if checksum ok and expected seq num ok, process packet and pass data to socket
+		       
+			if (IS_ACK(flags)) {
+				(*cs).state.SetLastAcked(acknum); //accumulative ack, so anything before acknum should be acked already
 			}
-			else //receive application data?  //p31 RFC  receiving data
-			{
-			    
-			}
-		     //handle state ESTABLISHED;
-		     break;
-		   case SEND_DATA:
-		     //handle state SEND_DATA;
-		     break;
-		   case CLOSE_WAIT:
-			(*cs).state.SetState(LAST_ACK);
+				
+			if (IS_FIN(flags)) {
+				(*cs).state.SetLastRecvd(seq); //no more data
+				(*cs).state.SetState(CLOSE_WAIT); //change state into CLOSE_WAIT
+			}	
 
-			packetMaker(out_packet, *cs, 0, S_FIN);
+		       	(*cs).state.SetSendRwnd(winsize); //update winsize
+		       	packetMaker(out_packet, *cs, 0, S_ACK); //send an ack to sender
+		       	MinetSend(mux, out_packet);
+	
+		       	//send packet to socket
+		       	repl.type = WRITE;
+		       	repl.connection = c;
+		       	repl.error = EOK;
+		       	repl.bytes = data_len;
+		       	repl.data = data;
+		       	MinetSend(sock,repl);
+		      } else { //something is not right, re-acked OR we can probably do nothing and wait for timeout 
+			packetMaker(out_packet, *cs, 0, S_ACK);
 			MinetSend(mux, out_packet);
-		     //handle state CLOSE_WAIT;
+		      }
 		     break;
-		   case FIN_WAIT1:
+		   
+		  case FIN_WAIT1:
 		     //handle case FIN_WAIT1;
 			if (IS_FIN(flags) && IS_ACK(flags))
 			{
 			    (*cs).state.SetState(TIME_WAIT);
-
+			    (*cs).state.SetLastAcked(acknum);
+			    (*cs).state.SetLastRecvd(seqnum);			     	
 			    packetMaker(out_packet, *cs, 0, S_ACK);
 			    MinetSend(mux, out_packet);
 			}
 			else if (IS_FIN(flags))
 			{
 			    (*cs).state.SetState(CLOSING);
-
+		            (*cs).state.SetLastRecvd(seqnum);		
 			    packetMaker(out_packet, *cs, 0, S_ACK);
 			    MinetSend(mux, out_packet);
 			}
 			else if (IS_ACK(flags))
 			{
 			    (*cs).state.SetState(FIN_WAIT2);
+			    (*cs).state.SetLastAcked(acknum);
+		            (*cs).state.SetLastRecvd(seqnum);	
 			}
 		     break;
 		   case CLOSING:
@@ -362,41 +321,38 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 			if (IS_ACK(flags))
 			{
 			    (*cs).state.SetState(TIME_WAIT);
+			    (*cs).state.SetLastAcked(acknum);
+			    (*cs).state.SetLastRecvd(seqnum);
 			}
 		     break;
 		   case LAST_ACK:
-
+			//handle case LASK_ACK;
 		     	if (IS_ACK(flags))
 			{
 			    (*cs).state.SetState(CLOSED);
+			    (*cs).state.SetLastAcked(acknum);
+			    (*cs).state.SetLastRecvd(seqnum);
 			    //send nothing
-			}
-
-
-		     //handle case LASK_ACK;
+			}   
 		     break;
 		   case FIN_WAIT2:
 		     //handle case FIN_WAIT2;
 			if (IS_FIN(flags))
 			{
 			    (*cs).state.SetState(TIME_WAIT);
-
+			    (*cs).state.SetLastRecvd(seqnum);
 			    packetMaker(out_packet, *cs, 0, S_ACK);
 			    MinetSend(mux, out_packet);
 			}
 		     break;
 		   case TIME_WAIT:
-		     //handle case TIME_WAIT;
+		     sleep(2*MSL_TIME_SECS);
+		     (*cs).state.SetState(CLOSE);
 		     break;
 		   default:
 	     break;
 	   }
 	}
-
-	//cerr << "TCP Packet: IP Header is "<<ipl<<" and ";
-	//cerr << "TCP Header is "<<tcph << " and ";
-
-	cerr << "Checksum is " << (tcph.IsCorrectChecksum(p) ? "VALID" : "INVALID");
 }
 
 void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<TCPState> &clist)
