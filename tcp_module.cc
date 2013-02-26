@@ -16,26 +16,30 @@
 #include "Minet.h"
 #include "tcpstate.h"
 #include "tcp.h"
+#include "sockint.h"
 
 #define S_SYN_ACK 0
 #define S_RST 1
 #define S_ACK 2
 #define S_FIN 3
+#define S_SYN 4
 
 using std::cout;
 using std::endl;
 using std::cerr;
 using std::string;
 
+
+void packetMaker(Packet &packet, ConnectionToStateMapping<TCPState>& constate, int size_of_data, int whichFlag);
 void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<TCPState> &clist);
 void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<TCPState> &clist);
-void timeoutHandler(MinetEvent event, ConnectionList<TCPState>::iterator cs);
+void timeoutHandler(const MinetHandle &mux, ConnectionList<TCPState>::iterator cs, ConnectionList<TCPState> &clist);
+
 
 int main(int argc, char *argv[])
 {
   MinetHandle mux, sock;
   ConnectionList<TCPState> clist;
-
   MinetInit(MINET_TCP_MODULE);
 
   mux=MinetIsModuleInConfig(MINET_IP_MUX) ? MinetConnect(MINET_IP_MUX) : MINET_NOHANDLE;
@@ -68,7 +72,7 @@ int main(int argc, char *argv[])
 	      if( cs != clist.end() )
 	      {
 	    	  if (Time().operator > ((*cs).timeout))
-		  	timeoutHandler(event,cs);
+		  	timeoutHandler(mux, cs, clist);
 	      }
 	  }
 
@@ -83,7 +87,6 @@ int main(int argc, char *argv[])
           if (event.handle==sock)
 	  {
 	      sockHandler(mux, sock, clist);
-	      cerr << "Received Socket Request:" << s << endl;
           }
       }
   }
@@ -94,16 +97,10 @@ int main(int argc, char *argv[])
 void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<TCPState> &clist)
 {
 	Packet p;
-	Packet out_packet;  //syn/ack packet for listen
-	SocketRequestResponse req, repl;
+	Packet out_packet; 
+	SockRequestResponse req, repl;
 	MinetReceive(mux,p);
 
-	p.ExtractHeaderFromPayload<TCPHeader>(tcphlen);
-	IPHeader iph=p.FindHeader(Headers::IPHeader);
-	TCPHeader tcph=p.FindHeader(Headers::TCPHeader);
-
-	cerr << "TCP Packet: IP Header is "<<iph<<" and ";
-	cerr << "TCP Header is "<<tcph << " and ";
 	bool checksumok;
 	unsigned int acknum, seqnum;
 	unsigned char flags;
@@ -141,7 +138,7 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 	   iph.GetTotalLength(total_len); //total length including ip header
 	   seg_len = total_len - iphlen; //segment length including tcp header
 	   data_len = seg_len - tcphlen; //actual data length
-	   Buffer &data=p.GetPayLoad().ExtractFront(data_len);
+	   Buffer data = p.GetPayload().ExtractFront(data_len);
 
 	   unsigned int state = (*cs).state.GetState();
 
@@ -178,7 +175,7 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 			    packetMaker(out_packet, *cs, 0, S_SYN_ACK);
 			    MinetSend(mux, out_packet);
 
-			    (*cs).state.SetLastSent((*cs).state.GetLastSent()+1)); //shifted last_sent one byte to the right    		       
+			    (*cs).state.SetLastSent((*cs).state.GetLastSent()+1); //shifted last_sent one byte to the right    		       
 	           	}
 		     break;
 		   case SYN_RCVD:
@@ -193,7 +190,7 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 			    	(*cs).bTmrActive = false;  //last_acked = last_sent, turn off timer
 
 			    	//Now we need to talk with the socket...
-			    	repl.type = WRITE; //ssrtype = WRITE
+				repl.type = WRITE; //ssrtype = WRITE
 			    	repl.connection = c;  //give it the tcp connection
 			    	repl.error = EOK;  //EOK = 0 means good
 			    	repl.bytes = 0;   //initialize at 0
@@ -204,7 +201,7 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 		      		(*cs).bTmrActive = false;
 
 		       		//not sure if it is needed to talk to socket about the status change
-		       		repl.type = STATUS;
+				repl.type = STATUS;
 		       		repl.connection = c;
 		       		repl.error = EOK;
 		       		repl.bytes = 0;
@@ -241,7 +238,7 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 				MinetSend(mux, out_packet);
 			      }
 			    } else if (IS_SYN(flags)) { //simultaneous connection 
-			        (*cs).state.SetState(SET_RCVD);
+			        (*cs).state.SetState(SYN_RCVD);
 			        (*cs).state.SetSendRwnd(winsize);
 			        (*cs).state.SetLastRecvd(seqnum);
 			
@@ -262,6 +259,7 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 			   } 
 		     break;
 		   case ESTABLISHED:
+		     {
 		     //handle state ESTABLISHED
 		     bool data_ok = (*cs).state.SetLastRecvd(seqnum,data_len); //check and set last_received
 		     if (checksumok && data_ok){  //if checksum ok and expected seq num ok, process packet and pass data to socket
@@ -271,7 +269,7 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 			}
 				
 			if (IS_FIN(flags)) {
-				(*cs).state.SetLastRecvd(seq); //no more data
+				(*cs).state.SetLastRecvd(seqnum); //no more data
 				(*cs).state.SetState(CLOSE_WAIT); //change state into CLOSE_WAIT
 			}	
 
@@ -290,8 +288,8 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 			packetMaker(out_packet, *cs, 0, S_ACK);
 			MinetSend(mux, out_packet);
 		      }
-		     break;
-		   
+		      break;
+		     }
 		  case FIN_WAIT1:
 		     //handle case FIN_WAIT1;
 			if (IS_FIN(flags) && IS_ACK(flags))
@@ -360,7 +358,7 @@ void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList
     SockRequestResponse s;
     MinetReceive(sock,s);
 
-    ConnectionList<TCPState>::iterator cs = clist.FindMatching(c);
+    ConnectionList<TCPState>::iterator cs = clist.FindMatching(s.connection);
 
 
     switch(s.type)
@@ -407,7 +405,7 @@ void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList
 		unsigned int timerTries = 3;
 
 		//LISTEN because of diagram for *passive open ; also p15 Minet
-	        TCTCPState newTCPState = TCPState(rand(), LISTEN, timerTries); 
+	        TCPState newTCPState = TCPState(rand(), LISTEN, timerTries); 
 		   
 		ConnectionToStateMapping<TCPState> constate;
 		constate.connection = s.connection;
@@ -443,7 +441,7 @@ void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList
 		
 	        Packet dataSend = Packet(s.data.ExtractFront(bytes));
 
-		(*cs).state.SetLastSent((*cs).state.GetLastSent() + bytes));
+		(*cs).state.SetLastSent((*cs).state.GetLastSent() + bytes);
 
 		packetMaker(dataSend, *cs, bytes, S_ACK);  //****WHAT DO WE NEED TO SEND??? AN ACK? ****/
 		MinetSend(mux, dataSend); 
@@ -484,7 +482,7 @@ void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList
 		    case SYN_RCVD:
 		    {
 			Packet out_packet;
-			createIPPacket(out_packet, *cs, 0, S_FIN);//create fin packet
+			packetMaker(out_packet, *cs, 0, S_FIN);//create fin packet
         		MinetSend(mux, out_packet);
 			(*cs).state.SetLastSent((*cs).state.GetLastSent() + 1);
         		(*cs).state.SetState(FIN_WAIT1);
@@ -494,7 +492,7 @@ void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList
 		    case ESTABLISHED:
 		    {
 			Packet out_packet;
-			createIPPacket(out_packet, *cs, 0, S_FIN);//create fin packet
+			packetMaker(out_packet, *cs, 0, S_FIN);//create fin packet
         		MinetSend(mux, out_packet);
 			(*cs).state.SetLastSent((*cs).state.GetLastSent() + 1);
         		(*cs).state.SetState(FIN_WAIT1);
@@ -504,7 +502,7 @@ void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList
 		    case CLOSE_WAIT:
 		    {
 			Packet out_packet;
-			createIPPacket(out_packet, *cs, 0, S_FIN);//create fin packet
+			packetMaker(out_packet, *cs, 0, S_FIN);//create fin packet
         		MinetSend(mux, out_packet);
 			(*cs).state.SetLastSent((*cs).state.GetLastSent()+1);
         		(*cs).state.SetState(LAST_ACK);
@@ -516,15 +514,18 @@ void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList
 			clist.erase(cs);
 			TCPState newTCPState = TCPState(rand(), LISTEN, 3);
 			ConnectionToStateMapping<TCPState> constate;
-			constate.state = s.connection;
+                	constate.connection = s.connection;
+			constate.state = newTCPState;
 			constate.bTmrActive = false;
-			clist.push_front(newTCPState);
+
+			clist.push_front(constate);
 		
-			reply.type = STATUS;
-			reply.connection = s.connection;
-			reply.bytes = 0;
-			reply.error = EOK;
-			MinetSend(sock, reply);
+			SockRequestResponse repl;
+			repl.type = STATUS;
+			repl.connection = s.connection;
+			repl.bytes = 0;
+			repl.error = EOK;
+			MinetSend(sock, repl);
 		    }
 		    break;
 		}
@@ -544,8 +545,8 @@ void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList
 		repl.error=EWHAT;
 		MinetSend(sock,repl);
 	}
-
-	case 
+	break;
+	
 
     }
 
@@ -554,9 +555,10 @@ void sockHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList
 void packetMaker(Packet &packet, ConnectionToStateMapping<TCPState>& constate, int size_of_data, int whichFlag)
 {
 
-  unsigned int flags = 0;
+  unsigned char flags = 0;
 
   int packet_length = size_of_data + TCP_HEADER_BASE_LENGTH + IP_HEADER_BASE_LENGTH;
+
   IPHeader ip;
   TCPHeader tcp;
   IPAddress source = constate.connection.src;
@@ -571,22 +573,24 @@ void packetMaker(Packet &packet, ConnectionToStateMapping<TCPState>& constate, i
   packet.PushFrontHeader(ip);
 
   switch (whichFlag){
-  case S_SYN_ACK:
-    SET_SYN(flags);
-    SET_ACK(flags);
-    break;
-  case S_RST:
-    SET_RST(flags);
-    break;
-  case S_ACK:
-    SET_ACK(flags);
-    break;
-  case S_FIN:
-    SET_FIN(flags);
-    break;
-  
-  default:
-    break;
+    case S_SYN_ACK:
+      SET_SYN(flags);
+      SET_ACK(flags);
+      break;
+    case S_RST:
+      SET_RST(flags);
+      break;
+    case S_ACK:
+      SET_ACK(flags);
+      break;
+    case S_FIN:
+      SET_FIN(flags);
+      break;
+    case S_SYN:
+      SET_SYN(flags);
+      break;
+    default:
+      break;
   }
 
   //just followed all the tcp.h stuff top to bottom
@@ -604,8 +608,9 @@ void packetMaker(Packet &packet, ConnectionToStateMapping<TCPState>& constate, i
 
 }
 
-void timeoutHandler(MinetEvent event, ConnectionList<TCPState>::iterator cs)
+void timeoutHandler(const MinetHandle &mux, ConnectionList<TCPState>::iterator cs, ConnectionList<TCPState> &clist)
 {
+
     if ( (*cs).state.ExpireTimerTries() || 
 	 (*cs).state.GetState()==SYN_SENT ||
 	 (*cs).state.GetState()==TIME_WAIT )   //from diagram
@@ -618,7 +623,7 @@ void timeoutHandler(MinetEvent event, ConnectionList<TCPState>::iterator cs)
 	(*cs).timeout = Time() + 40;
 	ConnectionToStateMapping<TCPState>& constate = (*cs);
 
-	int bufferLen = m.state.SendBuffer.GetSize();
+	int bufferLen = constate.state.SendBuffer.GetSize();
 	const int Size = TCP_MAXIMUM_SEGMENT_SIZE;
 	
 	char buffer[Size];
@@ -632,7 +637,7 @@ void timeoutHandler(MinetEvent event, ConnectionList<TCPState>::iterator cs)
 
 	    //Resend the data, get the payload
 	    int data = constate.state.SendBuffer.GetData(buffer, Size, whereAt); 
-	    Packet out_packet = new Packet(buffer, data);
+	    Packet out_packet = Packet(buffer, data);
 	
 	    // IP header stuff
 	    IPHeader ih;
