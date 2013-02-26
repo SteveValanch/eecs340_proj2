@@ -82,11 +82,13 @@ int main(int argc, char *argv[])
           //  Data from the IP layer below  //
           if (event.handle==mux) {
 	      muxHandler(mux, sock, clist);
+	      cout << "We made it to the mux handler!!" << endl;
           }
           //  Data from the Sockets layer above  //
           if (event.handle==sock)
 	  {
 	      sockHandler(mux, sock, clist);
+	      cout << "We made it to the sock handler!!" << endl;
           }
       }
   }
@@ -155,7 +157,7 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 		       //handle state LISTEN;
 			//want to check if we find an SYN because we are Listening...
 			//we may want to check for FIN is case there needs to be an RST in the connection (reset)
-		     
+		     cout << "We are listening!!" << endl;
 		     //initialize sender and receiver window pointers
 		     (*cs).state.SetLastSent(0); 
 		     (*cs).state.SetLastRecvd(0);
@@ -180,7 +182,7 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 		     break;
 		   case SYN_RCVD:
 		     // handle state SYN_RCVD;
-		     printf("syn_rcvd\n");
+		     cout << "We are in SYN_RCVD!!" << endl;
 		     if ((*cs).state.GetLastRecvd() == seqnum) {  //p266 (3rd arrow)
 		     	if (IS_ACK(flags)) {
 			    	printf("Established\n");
@@ -211,6 +213,7 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 		     break;
 		   case SYN_SENT:
 		     //handle state SYN_SENT;
+		     	cout << "We are in SYN_SENT!!" << endl;
 		     	printf("syn_sent\n");
 		     	    if (IS_SYN(flags) && IS_ACK(flags)) {
 			      if ((*cs).state.GetLastSent() == acknum) {
@@ -260,6 +263,7 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 		     break;
 		   case ESTABLISHED:
 		     {
+			cout << "We are in ESTABLISHED!!" << endl;
 		     //handle state ESTABLISHED
 		     bool data_ok = (*cs).state.SetLastRecvd(seqnum,data_len); //check and set last_received
 		     if (checksumok && data_ok){  //if checksum ok and expected seq num ok, process packet and pass data to socket
@@ -292,6 +296,7 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 		     }
 		  case FIN_WAIT1:
 		     //handle case FIN_WAIT1;
+		     	cout << "We are in FIN_WAIT1!!" << endl;
 			if (IS_FIN(flags) && IS_ACK(flags))
 			{
 			    (*cs).state.SetState(TIME_WAIT);
@@ -316,6 +321,7 @@ void muxHandler(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<
 		     break;
 		   case CLOSING:
 		     //handle case CLOSING;
+		      	cout << "We are CLOSING!!" << endl;
 			if (IS_ACK(flags))
 			{
 			    (*cs).state.SetState(TIME_WAIT);
